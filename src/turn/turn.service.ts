@@ -36,26 +36,36 @@ export class TurnService implements OnModuleInit {
 
     this.server.on('message', (msg, rinfo) => {
       const parsedMessage = this.parseMessage(msg);
-      console.log(parsedMessage);
+      console.log('Received message:', parsedMessage);
 
       if (parsedMessage && parsedMessage.type === 'stun') {
         this.handleStunRequest(msg, rinfo); // STUN 요청 처리
-      } else if (parsedMessage && parsedMessage.type === 'auth' && this.isValidUser(parsedMessage.username, parsedMessage.password)) {
-        this.clients.push({
-          address: rinfo.address,
-          port: rinfo.port,
-          username: parsedMessage.username,
-          password: parsedMessage.password,
-        });
-        this.relayMessage(msg, rinfo);
+      } else if (parsedMessage && parsedMessage.type === 'auth') {
+        this.handleAuthRequest(parsedMessage.username, parsedMessage.password, rinfo);
       } else {
-        console.error('Authentication failed or unknown message type:', rinfo.address);
+        this.logError('Unknown message type or missing parameters:', rinfo.address);
       }
     });
 
     this.server.bind(3478, '0.0.0.0', () => {
       console.log('TURN/STUN server is running on port 3478');
     });
+  }
+
+  handleAuthRequest(username: string, password: string, rinfo: dgram.RemoteInfo) {
+    if (this.isValidUser(username, password)) {
+      this.clients.push({
+        address: rinfo.address,
+        port: rinfo.port,
+        username,
+        password,
+      });
+      console.log(`Client authenticated: ${username} from ${rinfo.address}:${rinfo.port}`);
+      this.relayMessage(Buffer.from('Authentication success'), rinfo);
+    } else {
+      this.logError('Authentication failed for user:', username);
+      this.relayMessage(Buffer.from('Authentication failed'), rinfo);
+    }
   }
 
   isValidUser(username: string, password: string): boolean {
@@ -75,12 +85,14 @@ export class TurnService implements OnModuleInit {
       if (messageType === 0x0001) {
         return { type: 'stun' };
       } else if (messageType === 0x0002) {
-        return { type: 'auth', username: 'imnotMango', password: 'test1234' };
+        const username = msg.toString('utf8', 20, 36); // username 위치
+        const password = msg.toString('utf8', 36, 52); // password 위치
+        return { type: 'auth', username, password };
       }
 
       return null;
     } catch (error) {
-      console.error('Error parsing message:', error);
+      this.logError('Error parsing message:', error);
       return null;
     }
   }
@@ -111,7 +123,7 @@ export class TurnService implements OnModuleInit {
 
     this.server.send(response, 0, response.length, rinfo.port, rinfo.address, (err) => {
       if (err) {
-        console.error('Error sending STUN response:', err);
+        this.logError('Error sending STUN response:', err);
       } else {
         console.log(`STUN response sent to ${rinfo.address}:${rinfo.port}`);
       }
@@ -123,10 +135,14 @@ export class TurnService implements OnModuleInit {
       if (client.address !== rinfo.address || client.port !== rinfo.port) {
         this.server.send(msg, 0, msg.length, client.port, client.address, (err) => {
           if (err) {
-            throw new Error('Error relaying message');
+            this.logError('Error relaying message:', err);
           }
         });
       }
     });
+  }
+
+  logError(message: string, error?: any) {
+    console.error(message, error);
   }
 }
